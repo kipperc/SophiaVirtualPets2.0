@@ -27,10 +27,10 @@ class MyBot(commands.Bot):
 async def initialize_database():
     async with aiosqlite.connect('pets.db') as db:
         # Create the pets table if it doesn't exist
-        await db.execute('''
+        await db.execute(''' 
             CREATE TABLE IF NOT EXISTS pets (
-                owner_id INTEGER PRIMARY KEY,
                 name TEXT NOT NULL,
+                owner_id INTEGER PRIMARY KEY,
                 hunger INTEGER NOT NULL DEFAULT 50,
                 happiness INTEGER NOT NULL DEFAULT 50,
                 energy INTEGER NOT NULL DEFAULT 50,
@@ -41,6 +41,8 @@ async def initialize_database():
             )
         ''')
         await db.commit()
+
+
 
 WEATHER_TYPES = [
     {
@@ -122,17 +124,21 @@ class VirtualPet:
 
     @classmethod
     def from_db_row(cls, row):
+        if len(row) != 9:  # Ensure the row has the expected number of columns
+            raise ValueError(f"Row does not have the expected number of columns: {len(row)}")
+    
         return cls(
-            name=row['name'],
-            owner_id=int(row['owner_id']),  # Ensure owner_id is an integer
-            hunger=row['hunger'],
-            happiness=row['happiness'],
-            energy=row['energy'],
-            birth_time=row['birth_time'],
-            coins=row['coins']
+            owner_id=int(row[1]),  # Correctly access owner_id at index 1
+            name=row[0],            # Name is at index 0
+            hunger=row[2],          # Hunger is at index 2
+            happiness=row[3],       # Happiness is at index 3
+            energy=row[4],          # Energy is at index 4
+            birth_time=row[5],      # Birth time is at index 5
+            coins=row[6],           # Coins are at index 6
+            last_claimed=row[7],    # Last claimed is at index 7
+            freeze_end=row[8]       # Freeze end is at index 8
         )
-
-        
+    
     def status(self):
         return f"Hunger: {self.hunger}/100, Happiness: {self.happiness}/100, Energy: {self.energy}/100"
     
@@ -207,6 +213,7 @@ class VirtualPet:
         self.hunger = min(100, self.hunger + 1)
         self.happiness = max(0, self.happiness - 1)
         self.energy = max(0, self.energy - 1)
+        
 
     def generate_embed(self):
         embed = discord.Embed(title=self.name, color=0x00ff00)
@@ -223,11 +230,12 @@ class VirtualPet:
         async with aiosqlite.connect("pets.db") as db:
             await db.execute('''
                 INSERT OR REPLACE INTO pets 
-                (name, owner_id, hunger, happiness, energy, birth_time, coins, last_claimed, freeze_end)
+                (owner_id, name, hunger, happiness, energy, birth_time, coins, last_claimed, freeze_end)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (self.owner_id, self.name, self.hunger, self.happiness, self.energy, 
                   self.birth_time, self.coins, self.last_claimed, self.freeze_end))
             await db.commit()
+
     
     @staticmethod
     async def load(owner_id):
@@ -252,38 +260,31 @@ class VirtualPet:
         async with aiosqlite.connect("pets.db") as db:
             await db.execute('DELETE FROM pets WHERE owner_id = ?', (owner_id,))
             await db.commit()
+            
 
-    
-async def handle_reaction(ctx, pet, reaction):
-    if str(reaction.emoji) == "🍗":
-        await feed(ctx, pet)
-    elif str(reaction.emoji) == "🎾":
-        await play(ctx, pet)
-    elif str(reaction.emoji) == "💤":
-        await sleep(ctx, pet)
-        
+
 async def get_pet_data_from_database(owner_id):
     async with aiosqlite.connect('pets.db') as db:
-        async with db.execute("""
-            SELECT name, owner_id, hunger, happiness, energy, birth_time, coins, last_claimed, freeze_end
-            FROM pets
-            WHERE owner_id = ?
+        async with db.execute(""" 
+            SELECT name, owner_id, hunger, happiness, energy, birth_time, coins, last_claimed, freeze_end 
+            FROM pets 
+            WHERE owner_id = ? 
         """, (owner_id,)) as cursor:
             row = await cursor.fetchone()
             if row:
                 return {
-                    'name': row[0],
-                    'owner_id': row[1],
-                    'hunger': row[2],
-                    'happiness': row[3],
-                    'energy': row[4],
-                    'birth_time': row[5],
-                    'coins': row[6],
-                    'last_claimed': row[7],
-                    'freeze_end': row[8]
+                    'name': row[0],                             # Name as TEXT
+                    'owner_id': int(row[1]),                   # Ensure owner_id is an integer
+                    'hunger': int(row[2]),                     # Ensure hunger is an integer
+                    'happiness': int(row[3]),                  # Ensure happiness is an integer
+                    'energy': int(row[4]),                     # Ensure energy is an integer
+                    'birth_time': float(row[5]),               # Ensure birth_time is a float (if using timestamps)
+                    'coins': int(row[6]),                      # Ensure coins is an integer
+                    'last_claimed': float(row[7]) if row[7] is not None else None,  # Cast to float, or None
+                    'freeze_end': float(row[8]) if row[8] is not None else None   # Cast to float, or None
                 }
             return None
-        
+
 # Enabling row_factory to return dictionary-like objects
 async def fetch_pet_data(user_id):
     async with aiosqlite.connect('pets.db') as db:
@@ -291,16 +292,16 @@ async def fetch_pet_data(user_id):
         async with db.execute("SELECT * FROM pets WHERE owner_id = ?", (user_id,)) as cursor:
             row = await cursor.fetchone()
     return row
-
+            
 async def fetch_pet_from_db(owner_id):
     async with aiosqlite.connect('pets.db') as db:
-        async with db.execute("SELECT name, owner_id, hunger, happiness, energy, birth_time, coins FROM pets WHERE owner_id = ?", (owner_id,)) as cursor:
+        async with db.execute("SELECT * FROM pets WHERE owner_id = ?", (owner_id,)) as cursor:
             row = await cursor.fetchone()
             if row:
-                return VirtualPet.from_db_row(row)
-            else:
-                return None
-            
+                return VirtualPet.from_db_row(row)  # Ensure this matches the new row structure
+            return None
+
+
 def format_time(seconds):
     return str(timedelta(seconds=seconds)).split('.')[0]
 
@@ -320,7 +321,7 @@ async def update_pets_status():
         pets = await VirtualPet.load_all()
         for pet in pets:
             pet.update_status()
-            alive, message = pet.is_alive()
+            alive = pet.is_alive()
             if not alive:
                 await VirtualPet.delete(pet.owner_id)
                 continue
@@ -338,7 +339,7 @@ async def grant_daily_coins():
         await asyncio.sleep(86400)  # Wait for 24 hours
         pets = await VirtualPet.load_all()
         for pet in pets:
-            pet.coins += 1
+            pet.coins += 10
             await pet.save()
     
 current_weather = None
@@ -408,19 +409,20 @@ async def update_pet_in_db(pet):
     async with aiosqlite.connect('pets.db') as db:
         await db.execute("""
             UPDATE pets
-            SET name = ?, hunger = ?, happiness = ?, energy = ?, birth_time = ?, coins = ?
+            SET name = ?, hunger = ?, happiness = ?, energy = ?, birth_time = ?, coins = ?, last_claimed = ?, freeze_end = ?
             WHERE owner_id = ?
         """, (
-            pet.name,           # Access pet's name attribute with dot notation
-            pet.hunger,         # Access pet's hunger attribute
-            pet.happiness,      # Access pet's happiness attribute
-            pet.energy,         # Access pet's energy attribute
-            pet.birth_time,     # Access pet's birth_time attribute
-            pet.coins,          # Access pet's coins attribute
-            pet.owner_id        # Access pet's owner_id attribute
+            pet.name,                           # Access pet's name attribute
+            int(pet.hunger),                   # Ensure hunger is an integer
+            int(pet.happiness),                # Ensure happiness is an integer
+            int(pet.energy),                   # Ensure energy is an integer
+            float(pet.birth_time),             # Ensure birth_time is a float
+            int(pet.coins),                    # Ensure coins is an integer
+            float(pet.last_claimed) if pet.last_claimed is not None else None,  # Ensure last_claimed is a float or None
+            float(pet.freeze_end) if pet.freeze_end is not None else None,      # Ensure freeze_end is a float or None
+            int(pet.owner_id)                  # Ensure owner_id is an integer
         ))
         await db.commit()
-
     
 async def fetch_all_pets_from_db():
     # Connect to the SQLite database asynchronously
@@ -455,6 +457,10 @@ async def update_freeze_timer_in_db(owner_id, freeze_end):
         await db.execute("UPDATE pets SET freeze_end = ? WHERE owner_id = ?", (freeze_end, owner_id))
         await db.commit()
     
+async def is_admin(ctx):
+    return ctx.author.guild_permissions.administrator
+
+
 def generate_embed(pet):
     embed = discord.Embed(title=f"{pet.name}'s Status", color=discord.Color.blue())
     
@@ -564,7 +570,7 @@ async def status(ctx):
 
     # Fetch the pet from the database based on the user ID
     async with aiosqlite.connect('pets.db') as db:
-        async with db.execute("SELECT name, owner_id, hunger, happiness, energy, birth_time, coins FROM pets WHERE owner_id = ?", (user_id,)) as cursor:
+        async with db.execute("SELECT name, owner_id, hunger, happiness, energy, birth_time, coins, last_claimed, freeze_end FROM pets WHERE owner_id = ?", (user_id,)) as cursor:
             row = await cursor.fetchone()
 
             if row is None:
@@ -572,7 +578,12 @@ async def status(ctx):
                 return
 
             # Create a VirtualPet object from the database row using indices
-            pet = VirtualPet.from_db_row(row)
+            try:
+                pet = VirtualPet.from_db_row(row)
+            except IndexError as e:
+                print(f"Error creating pet from row: {e}")  # Log error if it occurs
+                await ctx.send("There was an error processing your pet data.")
+                return
 
     # Check if the pet is alive
     alive, message = pet.is_alive()
@@ -595,7 +606,7 @@ async def status(ctx):
     await message.add_reaction("🍗")  # Feed
     await message.add_reaction("🎾")  # Play
     await message.add_reaction("💤")  # Sleep
-    
+
 @bot.command()
 async def help(ctx):
     help_message = (
@@ -606,8 +617,12 @@ async def help(ctx):
         "`~freeze [coin_amount]` - Spend coins to freeze pet stats for vacations.\n"
         "`~rename [new_name]` - Rename pet.\n"
         "`~gift @user [coin_amount]` - Gift coins to another player.\n"
-        "`~daily` - Get a daily reward.\n"
         "`~weather` - Get a weather update.\n"
+        "`~adventure` - Take your pet out on an adventure.\n"
+        "`~babysit [user]` - Babysit your friend's pet.\n"
+        "`~feedfriend [user]` - Feed your friend's pet.\n"
+        "`~steal [user]` - Attempt to steal coins from another player.\n"
+        "Hidden commands! Find these to unlock hidden commands.\n"
         "Reactions: You can interact with your pet by reacting to the status message with:\n"
         "🍗 - Feed your pet\n"
         "🎾 - Play with your pet\n"
@@ -620,57 +635,32 @@ async def leaderboard(ctx):
     """Display the leaderboard of the longest-lived pets."""
     leaderboard_data = []
 
-    # Connect to the database
-    conn = await get_db_connection()
-    cursor = conn.cursor()
-
     try:
-        cursor.execute("SELECT name, owner_id, birth_time FROM pets")  # Adjust the fields as necessary
-        rows = await cursor.fetchall()  # Fetch all rows
+        async with aiosqlite.connect('pets.db') as db:
+            async with db.execute("SELECT name, owner_id, birth_time FROM pets") as cursor:
+                rows = await cursor.fetchall()  # Fetch all rows
 
-        for row in rows:
-            pet_name = row['name']
-            owner_id = row['owner_id']
-            age_in_seconds = time.time() - row['birth_time']  # Assuming birth_time is in seconds
-            age_in_days = age_in_seconds // (24 * 3600)  # Convert seconds to days
-            leaderboard_data.append((pet_name, owner_id, age_in_days))
+                for row in rows:
+                    pet_name = row[0]
+                    owner_id = row[1]
+                    age_in_seconds = time.time() - row[2]  # Assuming birth_time is in seconds
+                    age_in_days = age_in_seconds // (24 * 3600)  # Convert seconds to days
+                    leaderboard_data.append((pet_name, owner_id, age_in_days))
 
-        # Sort the leaderboard by age in descending order
-        leaderboard_data.sort(key=lambda x: x[2], reverse=True)  # Sort by age_in_days
+                # Sort the leaderboard by age in descending order
+                leaderboard_data.sort(key=lambda x: x[2], reverse=True)  # Sort by age_in_days
 
-        # Create an embed for the leaderboard
-        embed = discord.Embed(title="Pet Leaderboard", color=discord.Color.gold())
+                # Create an embed for the leaderboard
+                embed = discord.Embed(title="Pet Leaderboard", color=discord.Color.gold())
 
-        # Add each pet to the embed
-        for name, owner, age in leaderboard_data:
-            owner_user = await bot.fetch_user(owner)  # Fetch user from ID
-            embed.add_field(name=name, value=f"{owner_user.name}: {age} days", inline=False)
+                # Add each pet to the embed
+                for name, owner, age in leaderboard_data:
+                    owner_user = await bot.fetch_user(owner)  # Fetch user from ID
+                    embed.add_field(name=name, value=f"{owner_user.name}: {age} days", inline=False)
 
-        await ctx.send(embed=embed)
+                await ctx.send(embed=embed)
     except Exception as e:
         await ctx.send(f"An error occurred while fetching the leaderboard: {e}")
-    finally:
-        await cursor.close()
-        await conn.close()
-
-@bot.command()
-async def daily(ctx):
-    owner_id = ctx.author.id
-    # Fetch the user's pet from the database
-    pet = await fetch_pet_from_db(owner_id)
-    if not pet:
-        await ctx.send("You don't have a pet yet! Use `~adopt [pet_name]` to adopt one.")
-        return
-    current_time = time.time()
-    # Check if the pet has claimed the reward in the last 24 hours
-    if not pet.last_claimed or current_time - pet.last_claimed >= 86400:
-        pet.coins += 1  # Add 1 coin for the daily reward
-        pet.last_claimed = current_time  # Update the last claimed time
-        await update_pet_in_db(pet)  # Save changes back to the database
-        await ctx.send(f"Daily reward claimed! You now have {pet.coins} coins.")
-    else:
-        remaining_time = 86400 - (current_time - pet.last_claimed)
-        await ctx.send(f"Come back in {remaining_time // 3600} hours to claim your next reward.")
 
 @bot.command()
 async def rename(ctx, *, new_name: str):
@@ -780,5 +770,230 @@ async def delete_all_pets(ctx):
 async def delete_all_pets_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("You do not have permission to use this command.")
+        
+ADVENTURE_RESULTS = [
+    "Your pet explored a mystical forest and found a shiny rock! 🌲",
+    "Your pet swam across a river and chased a butterfly! 🦋",
+    "Your pet got lost in a cave but found its way back. 🐾",
+    "Your pet took a nap by the lake and felt refreshed! 😴"
+]
 
-bot.run('BOT TOKEN')
+@bot.command()
+async def adventure(ctx):
+    owner_id = ctx.author.id
+    pet = await fetch_pet_from_db(owner_id)
+    if not pet:
+        await ctx.send("You don't have a pet yet! Use `~adopt [pet_name]` to adopt one.")
+        return
+
+    if pet.energy < 20:
+        await ctx.send(f"{pet.name} is too tired to go on an adventure. 😴 Energy: {pet.energy}/100.")
+        return
+
+    result = random.choice(ADVENTURE_RESULTS)
+    pet.energy -= 10  # Deduct energy for the adventure
+    await update_pet_in_db(pet)
+    
+    await ctx.send(f"{pet.name} went on an adventure! {result} 🌟 Energy is now {pet.energy}/100.")
+
+@bot.command()
+async def feedfriend(ctx, friend: discord.Member):
+    owner_id = friend.id
+    pet = await fetch_pet_from_db(owner_id)
+
+    if not pet:
+        await ctx.send(f"{friend.display_name} doesn't have a pet yet!")
+        return
+
+    if pet.hunger < 20:
+        await ctx.send(f"{pet.name} isn't hungry right now!")
+        return
+
+    pet.hunger = max(0, pet.hunger - 20)  # Reduce hunger, but not below 0
+    await update_pet_in_db(pet)
+    
+    await ctx.send(f"{ctx.author.mention} fed {friend.display_name}'s pet! Hunger is now {pet.hunger}/100.")
+
+@bot.command()
+async def steal(ctx, target: discord.Member):
+    owner_id = ctx.author.id
+    pet = await fetch_pet_from_db(owner_id)
+    target_pet = await fetch_pet_from_db(target.id)
+
+    if not pet or not target_pet:
+        await ctx.send("Both pets need to exist for the heist to happen!")
+        return
+
+    success = random.choice([True, False])
+    if success:
+        stolen_amount = random.randint(1, 5)
+        if target_pet.coins >= stolen_amount:
+            pet.coins += stolen_amount
+            target_pet.coins -= stolen_amount
+            await update_pet_in_db(pet)
+            await update_pet_in_db(target_pet)
+            await ctx.send(f"{pet.name} successfully stole {stolen_amount} coins from {target_pet.name}! 💰")
+        else:
+            await ctx.send(f"{target_pet.name} doesn't have enough coins to steal!")
+    else:
+        await ctx.send(f"{pet.name}'s attempt to steal coins from {target_pet.name} failed! 😢")
+        
+@bot.command()
+async def babysit(ctx, friend: discord.Member):
+    owner_id = friend.id
+    pet = await fetch_pet_from_db(owner_id)
+
+    if not pet:
+        await ctx.send(f"{friend.display_name} doesn't have a pet yet!")
+        return
+
+    friend_message = (
+        f"{friend.display_name}'s pet {pet.name} stats:\n"
+        f"🌭 Hunger: {pet.hunger}/100\n"
+        f"😊 Happiness: {pet.happiness}/100\n"
+        f"⚡ Energy: {pet.energy}/100\n"
+        f"💰 Coins: {pet.coins}"
+    )
+    await ctx.send(friend_message)
+
+@bot.command()
+@commands.check(is_admin)
+async def give_coins(ctx, user: discord.User, amount: int):
+    if amount <= 0:
+        await ctx.send("Amount must be greater than zero.")
+        return
+
+    # Fetch the pet for the user (by their ID)
+    pet = await fetch_pet_from_db(user.id)
+    
+    if not pet:
+        await ctx.send(f"{user.name} does not have a pet!")
+        return
+
+    # Add the coins to the user's pet
+    pet.coins += amount
+    await pet.save()  # Save the updated pet back to the database
+
+    await ctx.send(f"Gave {amount} coins to {user.name}'s pet! They now have {pet.coins} coins.")
+
+# Handle the error if the command is used by a non-admin
+@give_coins.error
+async def give_coins_error(ctx, error):
+    if isinstance(error, commands.CheckFailure):
+        await ctx.send("You do not have permission to use this command.")
+        
+# Define a shop with items that set stats to maximum or minimum values
+SHOP_ITEMS = {
+    "food": {"cost": 100, "effect": "max_hunger", "description": "Feed your pet to reduce hunger to 0."},
+    "toy": {"cost": 100, "effect": "max_happiness", "description": "Increase your pet's happiness to 100."},
+    "nap": {"cost": 100, "effect": "max_energy", "description": "Restore your pet's energy to 100."}
+}
+
+@bot.command()
+async def shop(ctx):
+    # Display available shop items and their costs
+    shop_list = "\n".join([f"{item}: {details['cost']} coins - {details['description']}"
+                           for item, details in SHOP_ITEMS.items()])
+    await ctx.send(f"Welcome to the shop! Here are the available items:\n\n{shop_list}")
+
+@bot.command()
+async def buy(ctx, item_name: str):
+    owner_id = ctx.author.id
+    pet = await fetch_pet_from_db(owner_id)
+    
+    if not pet:
+        await ctx.send("You don't have a pet yet! Use `~adopt [pet_name]` to adopt one.")
+        return
+
+    item = SHOP_ITEMS.get(item_name.lower())
+
+    if not item:
+        await ctx.send(f"Item `{item_name}` is not available in the shop. Use `~shop` to see available items.")
+        return
+
+    if pet.coins < item["cost"]:
+        await ctx.send(f"You don't have enough coins to buy `{item_name}`. You need {item['cost']} coins.")
+        return
+
+    # Deduct the cost of the item
+    pet.coins -= item["cost"]
+
+    # Apply the item's effect (setting stats to 0 for hunger, 100 for happiness and energy)
+    if item["effect"] == "max_hunger":
+        pet.hunger = 0  # Set hunger to its minimum value
+    elif item["effect"] == "max_happiness":
+        pet.happiness = 100  # Set happiness to its maximum value
+    elif item["effect"] == "max_energy":
+        pet.energy = 100  # Set energy to its maximum value
+
+    await pet.save()  # Save the pet's updated stats to the database
+
+    await ctx.send(f"You bought `{item_name}` for {item['cost']} coins! Your pet's stats have been updated.")
+
+import random
+
+@bot.command()
+async def gamble(ctx, amount: int):
+    owner_id = ctx.author.id
+    pet = await fetch_pet_from_db(owner_id)
+    
+    if not pet:
+        await ctx.send("You don't have a pet yet! Use `~adopt [pet_name]` to adopt one.")
+        return
+
+    # Check if the amount is valid
+    if amount <= 0:
+        await ctx.send("Please enter a valid amount to gamble.")
+        return
+
+    # Check if the user has enough coins
+    if pet.coins < amount:
+        await ctx.send(f"You don't have enough coins to gamble {amount}. You only have {pet.coins} coins.")
+        return
+
+    # 50% chance of winning or losing
+    if random.choice([True, False]):  # 50% win, 50% lose
+        pet.coins += amount  # Double the user's bet
+        await ctx.send(f"Congratulations! You won {amount} coins! You now have {pet.coins} coins.")
+    else:
+        pet.coins -= amount  # User loses their bet
+        await ctx.send(f"Oops! You lost {amount} coins. You now have {pet.coins} coins.")
+
+    # Save the pet's updated coins
+    await pet.save()
+
+@bot.command()
+async def mostcoins(ctx):
+    async with aiosqlite.connect('pets.db') as db:
+        async with db.execute("SELECT owner_id, name, coins FROM pets ORDER BY coins DESC") as cursor:
+            rows = await cursor.fetchall()
+
+            if not rows:
+                await ctx.send("No pets found in the database.")
+                return
+            
+            leaderboard_text = "🏆 **Coins Leaderboard** 🏆\n\n"
+            for idx, (owner_id, name, coins) in enumerate(rows[:10]):  # Limit to top 10
+                leaderboard_text += f"{idx + 1}. {name} (ID: {owner_id}) - {coins} coins\n"
+
+            await ctx.send(leaderboard_text)
+
+
+@bot.command()
+async def balance(ctx):
+    user_id = ctx.author.id
+
+    # Fetch the pet from the database based on the user ID
+    async with aiosqlite.connect('pets.db') as db:
+        async with db.execute("SELECT name, coins FROM pets WHERE owner_id = ?", (user_id,)) as cursor:
+            row = await cursor.fetchone()
+
+            if row is None:
+                await ctx.send("You don't have a pet yet! Use `~adopt [pet_name]` to adopt one.")
+                return
+            
+            name, coins = row
+            await ctx.send(f"{name} has {coins} coins.")
+
+
+bot.run('TOKEN')
