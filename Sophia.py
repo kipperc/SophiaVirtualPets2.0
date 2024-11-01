@@ -206,14 +206,24 @@ class VirtualPet:
         self.hunger = min(100, self.hunger + 20)
         return f"{self.name} is peacefully sleeping! 💤 Energy: {self.energy}, Hunger: {self.hunger}"
     
+
     def update_status(self):
         if self.freeze_end and time.time() < self.freeze_end:
             return
-            
-        self.hunger = min(100, self.hunger + 1)
-        self.happiness = max(0, self.happiness - 1)
-        self.energy = max(0, self.energy - 1)
-        
+    
+        # Regular updates to hunger, happiness, and energy
+        self.hunger = min(100, self.hunger + random.randint(1, 3))
+        self.happiness = max(0, self.happiness - random.randint(1, 3))
+        self.energy = max(0, self.energy - random.randint(1, 3))
+    
+        # Trigger a random event with a 20% chance
+        if random.random() < 0.2:  
+            event = random.choice(RANDOM_EVENTS)
+            self.happiness = max(0, min(100, self.happiness + event["happiness_change"]))
+            self.hunger = max(0, min(100, self.hunger + event["hunger_change"]))
+            self.energy = max(0, min(100, self.energy + event["energy_change"]))
+    
+
 
     def generate_embed(self):
         embed = discord.Embed(title=self.name, color=0x00ff00)
@@ -305,15 +315,6 @@ async def fetch_pet_from_db(owner_id):
 def format_time(seconds):
     return str(timedelta(seconds=seconds)).split('.')[0]
 
-def trigger_random_event(self):
-    if self.freeze_end and time.time() < self.freeze_end:
-        return f"{self.name}'s stats are frozen. No event occurred."
-    
-    event = random.choice(RANDOM_EVENTS)
-    self.happiness = max(0, min(100, self.happiness + event["happiness_change"]))
-    self.hunger = max(0, min(100, self.hunger + event["hunger_change"]))
-    self.energy = max(0, min(100, self.energy + event["energy_change"]))
-    return event["description"]
 
 async def update_pets_status():
     while True:
@@ -994,6 +995,23 @@ async def balance(ctx):
             
             name, coins = row
             await ctx.send(f"{name} has {coins} coins.")
+            
+@bot.command()
+async def surprise(ctx, target: discord.User):
+    owner_id = target.id
+    pet = await fetch_pet_from_db(owner_id)
+
+    if not pet:
+        await ctx.send(f"{target.display_name} doesn't have a pet yet!")
+        return
+
+    event = random.choice(RANDOM_EVENTS)
+    pet.happiness = max(0, min(100, pet.happiness + event["happiness_change"]))
+    pet.hunger = max(0, min(100, pet.hunger + event["hunger_change"]))
+    pet.energy = max(0, min(100, pet.energy + event["energy_change"]))
+    await pet.save()
+
+    await ctx.send(f"Surprise for {target.display_name}'s pet: {event['description']}")
 
 
 bot.run('TOKEN')
